@@ -1,0 +1,9 @@
+# Binarios y compilados
+*.exe
+*.o
+*.obj
+
+# Logs y temporales
+*.log
+scratch/
+.system_generated/

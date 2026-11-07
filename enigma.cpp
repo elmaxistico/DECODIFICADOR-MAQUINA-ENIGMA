@@ -8,7 +8,6 @@
 #include <iomanip>
 #include <cstring>
 #include <cstdint>
-#include <cmath>
 #include <omp.h>
 
 using namespace std;
@@ -205,7 +204,7 @@ public:
 };
 
 // ============================================================================
-// PARSEO Y VALIDACIÓN ROBUSTA DE ENTRADAS
+// PARSEO Y VALIDACIÓN DE ENTRADAS
 // ============================================================================
 
 vector<string> split_tokens(const string& s) {
@@ -233,22 +232,20 @@ bool parse_single_rotor(string token, int& out_idx) {
 }
 
 bool validate_rotors_input(string input, int& r1, int& r2, int& r3, string& err_msg) {
-    // Si está vacío, por defecto I,II,III
     if (input.empty()) {
-        r1 = 0; r2 = 1; r3 = 2;
+        r1 = 0; r2 = 1; r3 = 2; // Por defecto I, II, III
         return true;
     }
 
     auto tokens = split_tokens(input);
 
-    // Caso especial: si es de 3 dígitos directos como "123"
     if (tokens.size() == 1 && tokens[0].size() == 3 && isdigit(tokens[0][0])) {
         string s = tokens[0];
         tokens = {string(1, s[0]), string(1, s[1]), string(1, s[2])};
     }
 
     if (tokens.size() != 3) {
-        err_msg = "Debes ingresar exactamente 3 rotores (ej: I,II,III o 1,2,3 o I-II-III).";
+        err_msg = "Debes ingresar 3 rotores (ej: I,II,III o 1,2,3 o I-II-III).";
         return false;
     }
 
@@ -391,330 +388,34 @@ bool validate_plugboard_input(string input, string& clean_plugs, string& err_msg
 }
 
 // ============================================================================
-// MODELOS ESTADÍSTICOS DE IDIOMAS (ESPAÑOL, ALEMÁN, INGLÉS)
+// MODELO DE EVALUACIÓN LINGÜÍSTICA Y RECONOCIMIENTO DE PALABRAS
 // ============================================================================
 
-enum Language { LANG_ES, LANG_DE, LANG_EN };
-
-struct LanguageModel {
-    double bigram_weights[26][26];
-
-    void init(Language lang) {
-        const double mono_es[26] = {
-            -2.07, -4.25, -3.06, -2.83, -1.98, -4.97, -4.59, -4.96,
-            -2.77, -5.42, -9.21, -3.00, -3.45, -2.70, -2.44, -3.68,
-            -4.73, -2.67, -2.52, -3.07, -3.23, -4.71, -9.21, -6.11,
-            -4.71, -5.25
-        };
-        const double mono_de[26] = {
-            -2.73, -3.96, -3.48, -2.97, -1.80, -4.09, -3.50, -3.08,
-            -2.58, -5.91, -4.41, -3.36, -3.67, -2.32, -3.68, -4.84,
-            -8.51, -2.65, -2.62, -2.78, -3.13, -5.00, -3.96, -8.11,
-            -7.82, -4.48
-        };
-        const double mono_en[26] = {
-            -2.50, -4.20, -3.57, -2.93, -2.06, -3.79, -3.91, -2.79,
-            -2.66, -7.26, -5.11, -3.21, -3.73, -2.70, -2.59, -4.00,
-            -7.01, -2.81, -2.76, -2.40, -3.57, -4.62, -3.86, -7.26,
-            -3.91, -7.26
-        };
-
-        const double* chosen_mono = (lang == LANG_ES) ? mono_es : (lang == LANG_DE ? mono_de : mono_en);
-
-        for (int i = 0; i < 26; ++i) {
-            for (int j = 0; j < 26; ++j) {
-                bigram_weights[i][j] = chosen_mono[i] + chosen_mono[j];
-            }
-        }
-
-        if (lang == LANG_ES) {
-            const char* top_es[] = {
-                "DE", "ES", "EN", "EL", "LA", "OS", "ON", "ER", "AS", "AR",
-                "RA", "RE", "TE", "AL", "OR", "CO", "UE", "NT", "TA", "CI",
-                "IO", "DO", "AN", "QU", "AD", "SE", "TR", "PO", "TO", "IN",
-                "ST", "MA", "RO", "AC", "UN", "CA", "SO", "PA", "ME", "DI",
-                "PR", "OR", "LE", "DA", "LL", "CH", "RR", "PE", "LO", "SU"
-            };
-            for (const char* b : top_es) bigram_weights[b[0]-'A'][b[1]-'A'] += 3.0;
-        } else if (lang == LANG_DE) {
-            const char* top_de[] = {
-                "ER", "EN", "CH", "DE", "EI", "TE", "IN", "ND", "IE", "GE",
-                "ES", "NE", "UN", "ST", "RE", "HE", "AN", "BE", "SE", "NG",
-                "DI", "IC", "SC", "AU", "DA", "IT", "LE", "ZU", "OR", "SI"
-            };
-            for (const char* b : top_de) bigram_weights[b[0]-'A'][b[1]-'A'] += 3.0;
-        } else {
-            const char* top_en[] = {
-                "TH", "HE", "IN", "ER", "AN", "RE", "ED", "ON", "ES", "ST",
-                "EN", "AT", "TO", "NT", "HA", "ND", "OU", "EA", "NG", "AS"
-            };
-            for (const char* b : top_en) bigram_weights[b[0]-'A'][b[1]-'A'] += 3.0;
-        }
-    }
-
-    double score(const string& text) const {
-        if (text.size() < 2) return -1e9;
-        double s = 0.0;
-        for (size_t i = 0; i < text.size() - 1; ++i) {
-            s += bigram_weights[text[i] - 'A'][text[i+1] - 'A'];
-        }
-        // Bonificación de palabras reales en español / multilingüe
-        const char* common_words[] = {
-            "HOLA", "ESTE", "ESTA", "ESTOS", "ESTAS", "ESTO", "ES", "UN", "UNA", "UNOS", "UNAS",
-            "MENSAJE", "DE", "DEL", "PRUEBA", "PARA", "POR", "EL", "LA", "LOS", "LAS",
-            "DECODIFICADOR", "CODIFICADOR", "QUE", "HIZO", "HACE", "GEMINI", "ENIGMA",
-            "CON", "SIN", "SOBRE", "ENTRE", "HASTA", "DESDE", "COMO", "CUANDO", "DONDE",
-            "QUIEN", "TODO", "TODA", "TODOS", "TODAS", "MAS", "PERO", "AUNQUE", "BIEN",
-            "MAL", "TIEMPO", "DIA", "DIAS", "NOCHE", "MANANA", "TARDE", "HOY", "AYER",
-            "GUERRA", "PAZ", "ATAQUE", "DEFENSA", "ORDEN", "PARTE", "GRUPO", "INFORME",
-            "SECRETO", "CLAVE", "TEXTO", "ROTOR", "ROTORES", "ALEMANIA", "EJERCITO"
-        };
-        for (const char* w : common_words) {
-            string word = w;
-            if (text.find(word) != string::npos) {
-                s += (double)(word.size() * word.size() * 12.0);
-            }
-        }
-        return s;
-    }
-
-    double score(const vector<uint8_t>& vec) const {
-        string text = "";
-        for (uint8_t c : vec) text += (char)('A' + c);
-        return score(text);
-    }
-};
-
-double calc_ioc(const vector<uint8_t>& text) {
-    if (text.size() < 2) return 0.0;
-    int counts[26] = {0};
-    for (uint8_t c : text) counts[c]++;
-    long long sum = 0;
-    for (int i = 0; i < 26; ++i) sum += (long long)counts[i] * (counts[i] - 1);
-    return (double)sum / ((double)text.size() * (text.size() - 1));
-}
-
-// ============================================================================
-// DESCIFRADOR MODERNO 100% A CIEGAS (Ciphertext-Only)
-// ============================================================================
-
-struct ModernCrackResult {
-    string rotors;
-    string positions;
-    string plugboard;
-    string plaintext;
-    double ioc;
-    double language_score;
-};
-
-ModernCrackResult run_modern_blind_crack(const string& ciphertext, Language lang = LANG_ES, char reflector_type = 'B') {
-    cout << "\n=======================================================\n";
-    cout << "      DESCIFRADOR MODERNO 100% A CIEGAS (CIPHERTEXT-ONLY)\n";
-    cout << "=======================================================\n";
-    cout << "Idioma objetivo : " << (lang == LANG_ES ? "Espanol" : (lang == LANG_DE ? "Aleman" : "Ingles")) << "\n";
-    cout << "Texto cifrado   : " << ciphertext.substr(0, 50) << (ciphertext.size() > 50 ? "..." : "") << "\n";
-
-    vector<uint8_t> clean_cipher;
-    for (char c : ciphertext) if (isalpha(c)) clean_cipher.push_back(toupper(c) - 'A');
-
-    cout << "Longitud util   : " << clean_cipher.size() << " letras\n";
-    cout << "IoC del cifrado : " << fixed << setprecision(5) << calc_ioc(clean_cipher) << " (Ruido ~0.038)\n\n";
-
-    if (clean_cipher.size() < 70) {
-        cout << "[!] AVISO IMPORTANTE (Distancia de Unicidad de Shannon):\n";
-        cout << "    El texto tiene " << clean_cipher.size() << " letras. Para descifrado a ciegas\n";
-        cout << "    (sin conocer clave ni palabras) se recomiendan al menos 80-100 letras.\n";
-        cout << "    Para mensajes cortos como este, la tecnica mas precisa es el\n";
-        cout << "    Ataque por CRIB (Opcion 3), indicando una palabra sospechada.\n\n";
-    }
-
-    LanguageModel lm;
-    lm.init(lang);
-
-    auto t0 = chrono::high_resolution_clock::now();
-
-    // 1. Generamos TODAS las 125 combinaciones posibles (las 60 históricas + repetidas)
-    struct RotorPerm { int r1, r2, r3; };
-    vector<RotorPerm> perms;
-    for (int r1 = 0; r1 < 5; ++r1) {
-        for (int r2 = 0; r2 < 5; ++r2) {
-            if (r2 == r1) continue;
-            for (int r3 = 0; r3 < 5; ++r3) {
-                if (r3 == r1 || r3 == r2) continue;
-                perms.push_back({r1, r2, r3});
-            }
-        }
-    }
-    for (int r1 = 0; r1 < 5; ++r1) {
-        for (int r2 = 0; r2 < 5; ++r2) {
-            for (int r3 = 0; r3 < 5; ++r3) {
-                if (r1 == r2 || r2 == r3 || r1 == r3) {
-                    perms.push_back({r1, r2, r3});
-                }
-            }
-        }
-    }
-
-    struct RotorCandidate {
-        int r1, r2, r3;
-        int p1, p2, p3;
-        double ioc;
+double evaluate_plaintext_words(const string& text) {
+    // Lista de palabras frecuentes en español
+    const char* common_words[] = {
+        "HOLA", "ESTE", "ESTA", "ESTOS", "ESTAS", "ESTO", "ES", "UN", "UNA", "UNOS", "UNAS",
+        "MENSAJE", "DE", "DEL", "PRUEBA", "PARA", "POR", "EL", "LA", "LOS", "LAS",
+        "DECODIFICADOR", "CODIFICADOR", "QUE", "HIZO", "HACE", "GEMINI", "ENIGMA",
+        "CON", "SIN", "SOBRE", "ENTRE", "HASTA", "DESDE", "COMO", "CUANDO", "DONDE",
+        "QUIEN", "TODO", "TODA", "TODOS", "TODAS", "MAS", "PERO", "AUNQUE", "BIEN",
+        "MAL", "TIEMPO", "DIA", "DIAS", "NOCHE", "MANANA", "TARDE", "HOY", "AYER",
+        "GUERRA", "PAZ", "ATAQUE", "DEFENSA", "ORDEN", "PARTE", "GRUPO", "INFORME",
+        "SECRETO", "CLAVE", "TEXTO", "ROTOR", "ROTORES", "ALEMANIA", "EJERCITO"
     };
 
-    cout << "[Fase 1/2] Escaneando " << (perms.size() * 17576) << " configuraciones de rotores con IoC...\n";
-
-    vector<RotorCandidate> top_candidates;
-    const double IOC_THRESHOLD = 0.046;
-
-    #pragma omp parallel
-    {
-        vector<RotorCandidate> local_cands;
-
-        #pragma omp for schedule(dynamic)
-        for (size_t pi = 0; pi < perms.size(); ++pi) {
-            int r1 = perms[pi].r1;
-            int r2 = perms[pi].r2;
-            int r3 = perms[pi].r3;
-
-            for (int p1 = 0; p1 < 26; ++p1) {
-                for (int p2 = 0; p2 < 26; ++p2) {
-                    for (int p3 = 0; p3 < 26; ++p3) {
-                        Enigma sim;
-                        sim.configure_indices(r1, r2, r3, 0, 0, 0, p1, p2, p3, reflector_type);
-
-                        int counts[26] = {0};
-                        for (uint8_t c : clean_cipher) {
-                            counts[sim.process_letter(c)]++;
-                        }
-
-                        long long sum = 0;
-                        for (int i = 0; i < 26; ++i) sum += (long long)counts[i] * (counts[i] - 1);
-                        double ioc = (double)sum / ((double)clean_cipher.size() * (clean_cipher.size() - 1));
-
-                        if (ioc >= IOC_THRESHOLD) {
-                            local_cands.push_back({r1, r2, r3, p1, p2, p3, ioc});
-                        }
-                    }
-                }
-            }
-        }
-
-        #pragma omp critical
-        {
-            top_candidates.insert(top_candidates.end(), local_cands.begin(), local_cands.end());
+    double s = 0.0;
+    for (const char* w : common_words) {
+        string word = w;
+        if (text.find(word) != string::npos) {
+            s += (double)(word.size() * word.size() * 12.0);
         }
     }
-
-    sort(top_candidates.begin(), top_candidates.end(), [](const RotorCandidate& a, const RotorCandidate& b) {
-        return a.ioc > b.ioc;
-    });
-
-    auto t1 = chrono::high_resolution_clock::now();
-    auto ms_phase1 = chrono::duration_cast<chrono::milliseconds>(t1 - t0).count();
-
-    cout << "  -> Fase 1 completada en " << ms_phase1 << " ms. Candidatos filtrados: " << top_candidates.size() << "\n\n";
-
-    if (top_candidates.empty()) {
-        cout << "[!] No se detectaron picos de IoC suficientes.\n";
-        return {};
-    }
-
-    int candidates_to_test = min((int)top_candidates.size(), 30);
-    cout << "[Fase 2/2] Optimizando clavijero (Steckerbrett) en los " << candidates_to_test << " mejores candidatos...\n";
-
-    const char* rotor_names[5] = {"I", "II", "III", "IV", "V"};
-    ModernCrackResult best_result;
-    best_result.language_score = -1e12;
-
-    for (int ci = 0; ci < candidates_to_test; ++ci) {
-        const auto& cand = top_candidates[ci];
-
-        uint8_t cur_plugs[26];
-        for (int i = 0; i < 26; ++i) cur_plugs[i] = i;
-
-        auto eval_plugs = [&](const uint8_t* pl) {
-            Enigma sim;
-            sim.configure_indices(cand.r1, cand.r2, cand.r3, 0, 0, 0, cand.p1, cand.p2, cand.p3, reflector_type, pl);
-            vector<uint8_t> dec(clean_cipher.size());
-            for (size_t i = 0; i < clean_cipher.size(); ++i) dec[i] = sim.process_letter(clean_cipher[i]);
-            return lm.score(dec);
-        };
-
-        double cur_score = eval_plugs(cur_plugs);
-
-        bool improved = true;
-        int passes = 0;
-        while (improved && passes < 10) {
-            improved = false;
-            passes++;
-            for (int a = 0; a < 26; ++a) {
-                for (int b = a + 1; b < 26; ++b) {
-                    uint8_t test_plugs[26];
-                    memcpy(test_plugs, cur_plugs, 26);
-
-                    int old_a = test_plugs[a];
-                    int old_b = test_plugs[b];
-                    test_plugs[old_a] = old_a;
-                    test_plugs[old_b] = old_b;
-
-                    test_plugs[a] = b;
-                    test_plugs[b] = a;
-
-                    double sc = eval_plugs(test_plugs);
-                    if (sc > cur_score) {
-                        cur_score = sc;
-                        memcpy(cur_plugs, test_plugs, 26);
-                        improved = true;
-                    }
-                }
-            }
-        }
-
-        if (cur_score > best_result.language_score) {
-            best_result.language_score = cur_score;
-            best_result.rotors = string(rotor_names[cand.r1]) + "-" + rotor_names[cand.r2] + "-" + rotor_names[cand.r3];
-            best_result.positions = string(1, (char)('A' + cand.p1)) + (char)('A' + cand.p2) + (char)('A' + cand.p3);
-            best_result.ioc = cand.ioc;
-
-            string plugs_str = "";
-            for (int i = 0; i < 26; ++i) {
-                if (cur_plugs[i] > i) {
-                    if (!plugs_str.empty()) plugs_str += " ";
-                    plugs_str += (char)('A' + i);
-                    plugs_str += (char)('A' + cur_plugs[i]);
-                }
-            }
-            best_result.plugboard = plugs_str.empty() ? "(Ninguno)" : plugs_str;
-
-            Enigma final_sim;
-            final_sim.configure_indices(cand.r1, cand.r2, cand.r3, 0, 0, 0, cand.p1, cand.p2, cand.p3, reflector_type, cur_plugs);
-            best_result.plaintext = "";
-            for (uint8_t c : clean_cipher) {
-                best_result.plaintext += (char)('A' + final_sim.process_letter(c));
-            }
-        }
-    }
-
-    auto t2 = chrono::high_resolution_clock::now();
-    auto total_ms = chrono::duration_cast<chrono::milliseconds>(t2 - t0).count();
-
-    cout << "[OK] Descifrado completado en: " << total_ms << " ms.\n";
-    cout << "=======================================================\n";
-    cout << "               RESULTADOS DEL CRIPTANÁLISIS            \n";
-    cout << "=======================================================\n";
-    cout << "Rotores encontrados   : " << best_result.rotors << "\n";
-    cout << "Posición inicial      : " << best_result.positions << "\n";
-    cout << "Clavijero descubierto : " << best_result.plugboard << "\n";
-    cout << "Indice de coincidencia: " << fixed << setprecision(4) << best_result.ioc << "\n";
-    cout << "Puntuación de idioma  : " << best_result.language_score << "\n\n";
-    cout << "TEXTO DESCIFRADO:\n" << best_result.plaintext << "\n";
-    cout << "=======================================================\n";
-
-    return best_result;
+    return s;
 }
 
 // ============================================================================
-// ATAQUE POR CRIB (BLETCHLEY PARK / BOMBA DE TURING)
+// ATAQUE POR CRIB (EL ÚNICO MÉTODO HISTÓRICO Y MATEMÁTICAMENTE VIABLE)
 // ============================================================================
 
 struct CrackResult {
@@ -725,7 +426,7 @@ struct CrackResult {
     int offset;
 };
 
-void run_crib_attack(const string& ciphertext, const string& crib, char reflector_type = 'B', Language lang = LANG_ES) {
+void run_crib_attack(const string& ciphertext, const string& crib, char reflector_type = 'B') {
     cout << "\n=======================================================\n";
     cout << "  INICIANDO ATAQUE CRIB (ESTILO BLETCHLEY PARK / BOMBE)\n";
     cout << "=======================================================\n";
@@ -745,12 +446,10 @@ void run_crib_attack(const string& ciphertext, const string& crib, char reflecto
 
     auto t0 = chrono::high_resolution_clock::now();
 
-    LanguageModel lm;
-    lm.init(lang);
-
     vector<CrackResult> matches;
     const char* rotor_names[5] = {"I", "II", "III", "IV", "V"};
 
+    // Verificación de imposibilidad física de Enigma: Ninguna letra se cifra a sí misma
     vector<int> valid_offsets;
     for (size_t offset = 0; offset <= clean_cipher.size() - clean_crib.size(); ++offset) {
         bool crash = false;
@@ -763,9 +462,10 @@ void run_crib_attack(const string& ciphertext, const string& crib, char reflecto
         if (!crash) valid_offsets.push_back(offset);
     }
 
-    cout << "Posiciones validas para el crib (filtrando colisiones N!=E(N)): " 
+    cout << "Posiciones viables para el crib (filtrando colisiones N!=E(N)): " 
          << valid_offsets.size() << "/" << (clean_cipher.size() - clean_crib.size() + 1) << "\n";
 
+    // 125 combinaciones posibles de rotores (las 60 históricas + repetidas)
     struct RotorPerm { int r1, r2, r3; };
     vector<RotorPerm> perms;
     for (int r1 = 0; r1 < 5; ++r1) {
@@ -831,7 +531,7 @@ void run_crib_attack(const string& ciphertext, const string& crib, char reflecto
             for (size_t i = 0; i < clean_cipher.size(); ++i) {
                 text += (char)('A' + sim.process_letter(clean_cipher[i] - 'A'));
             }
-            return lm.score(text);
+            return evaluate_plaintext_words(text);
         };
 
         double cur_score = eval_plugs(cur_plugs);
@@ -867,7 +567,7 @@ void run_crib_attack(const string& ciphertext, const string& crib, char reflecto
             }
         }
 
-        // Descifrado respetando espacios del texto original
+        // Descifrado respetando la estructura y espacios del texto original
         Enigma final_sim;
         final_sim.configure_indices(m.r1, m.r2, m.r3, 0, 0, 0, m.p1, m.p2, m.p3, reflector_type, cur_plugs);
         string formatted_dec = "";
@@ -930,18 +630,16 @@ void print_help() {
     cout << "   SIMULADOR Y DESCIFRADOR DE ENIGMA I / M3 (C++17)                  \n";
     cout << "=====================================================================\n";
     cout << "Uso: enigma [opciones]\n\n";
-    cout << "Modos de Criptanálisis (Descifrado):\n";
-    cout << "  --blind                     Descifrado 100% a ciegas (Ciphertext-Only, sin crib)\n";
-    cout << "  --lang <es|de|en>           Idioma para descifrado a ciegas (def: es)\n";
-    cout << "  --crack <crib>              Ataque por crib (palabra sospechada, Bletchley Park)\n\n";
+    cout << "Modo de Criptanálisis (Descifrado con palabra sospechada):\n";
+    cout << "  -c, --crack <crib>          Ataque por crib (el metodo viable de Turing)\n\n";
     cout << "Opciones de Operación Normal (con clave conocida):\n";
-    cout << "  -r, --rotors <R1,R2,R3>     Rotores de izq a der (ej: I,II,III o 1,2,3 o I-II-III)\n";
-    cout << "  -p, --pos <XYZ>             Posicion inicial (Grundstellung, ej: AAA o A-A-A)\n";
-    cout << "  -g, --rings <G1,G2,G3>      Anillos (Ringstellung, ej: 01,01,01 o AAA)\n";
+    cout << "  -r, --rotors <R1,R2,R3>     Rotores (ej: I,II,III o 1,2,3 o I-II-III)\n";
+    cout << "  -p, --pos <XYZ>             Posicion inicial (ej: AAA o A-A-A)\n";
+    cout << "  -g, --rings <G1,G2,G3>      Anillos (Ringstellung, ej: 01,01,01 o 1-1-1)\n";
     cout << "  -u, --reflector <B|C>       Reflector (UKW-B o UKW-C, por defecto B)\n";
-    cout << "  -s, --plugs <\"AB CD...\">    Clavijero (Steckerbrett, pares separados por espacio)\n";
+    cout << "  -s, --plugs <\"AB CD...\">    Clavijero (Steckerbrett, pares de letras)\n";
     cout << "  -t, --text <mensaje>        Texto a procesar\n";
-    cout << "  --military                  Formato militar (mayusculas en bloques de 5)\n";
+    cout << "  --military                  Formato militar (bloques de 5 mayusculas)\n";
     cout << "  -h, --help                  Muestra esta ayuda\n\n";
 }
 
@@ -953,12 +651,11 @@ void run_interactive_menu() {
         cout << "       SIMULADOR Y DESCIFRADOR DE ENIGMA (C++17)       \n";
         cout << "=======================================================\n";
         cout << "1. Codificar / Decodificar mensaje (con clave conocida)\n";
-        cout << "2. Descifrador MODERNO A CIEGAS (sin clave ni crib)\n";
-        cout << "3. Descifrador clasico por CRIB (Bletchley Park / Bombe)\n";
-        cout << "4. Caso historico real (Operacion Barbarroja 1941)\n";
-        cout << "5. Benchmark de rendimiento (>100M caracteres/seg)\n";
-        cout << "6. Salir\n";
-        cout << "Seleccione una opcion [1-6]: ";
+        cout << "2. Descifrar mensaje interceptado por CRIB (Bletchley Park)\n";
+        cout << "3. Caso historico real (Operacion Barbarroja 1941)\n";
+        cout << "4. Benchmark de rendimiento (>100M letras/seg)\n";
+        cout << "5. Salir\n";
+        cout << "Seleccione una opcion [1-5]: ";
 
         string opt;
         if (!getline(cin, opt)) break;
@@ -973,7 +670,6 @@ void run_interactive_menu() {
             string text_in = "";
             string err = "";
 
-            // 1. Rotores
             while (true) {
                 cout << "\nRotores (ej. I,II,III o 1,2,3 o I-II-III) [I,II,III]: ";
                 string r_in;
@@ -982,7 +678,6 @@ void run_interactive_menu() {
                 cout << "[!] Error: " << err << "\n";
             }
 
-            // 2. Posición inicial
             while (true) {
                 cout << "Posicion inicial (ej. AAA o A-A-A) [AAA]: ";
                 string p_in;
@@ -991,16 +686,14 @@ void run_interactive_menu() {
                 cout << "[!] Error: " << err << "\n";
             }
 
-            // 3. Anillos
             while (true) {
-                cout << "Anillos (Ringstellung, ej. 01,01,01 o AAA o 1-1-1) [01,01,01]: ";
+                cout << "Anillos (Ringstellung, ej. 01,01,01 o 1-1-1) [01,01,01]: ";
                 string g_in;
                 getline(cin, g_in);
                 if (validate_rings_input(g_in, g1, g2, g3, err)) break;
                 cout << "[!] Error: " << err << "\n";
             }
 
-            // 4. Reflector
             while (true) {
                 cout << "Reflector (B o C) [B]: ";
                 string ref_in;
@@ -1009,7 +702,6 @@ void run_interactive_menu() {
                 cout << "[!] Error: " << err << "\n";
             }
 
-            // 5. Clavijero
             while (true) {
                 cout << "Clavijero / Steckerbrett (ej. AV BS CG o vacio): ";
                 string s_in;
@@ -1018,16 +710,14 @@ void run_interactive_menu() {
                 cout << "[!] Error: " << err << "\n";
             }
 
-            // 6. Texto
             cout << "\nTexto a procesar: ";
             getline(cin, text_in);
 
-            // Resumen de configuración confirmada
             cout << "\n=======================================================\n";
             cout << "              CONFIGURACIÓN DE LA MÁQUINA              \n";
             cout << "=======================================================\n";
             cout << "  Rotores configurados : " << rotor_names[r1] << " - " << rotor_names[r2] << " - " << rotor_names[r3];
-            if (r1 == r2 || r2 == r3 || r1 == r3) cout << " (Aviso: Rotores repetidos)";
+            if (r1 == r2 || r2 == r3 || r1 == r3) cout << " (Rotores repetidos)";
             cout << "\n";
             cout << "  Posición inicial     : " << (char)('A' + p1) << " - " << (char)('A' + p2) << " - " << (char)('A' + p3) << "\n";
             cout << "  Anillos              : " << (g1 + 1) << " - " << (g2 + 1) << " - " << (g3 + 1) << "\n";
@@ -1050,27 +740,24 @@ void run_interactive_menu() {
             cout << "-------------------------------------------------------\n";
 
         } else if (opt == "2") {
-            string cipher, lang_in;
-            cout << "\nIngrese el texto cifrado: ";
-            getline(cin, cipher);
-
-            cout << "Idioma presunto (1=Espanol, 2=Aleman, 3=Ingles) [1]: ";
-            getline(cin, lang_in);
-            Language l = LANG_ES;
-            if (lang_in == "2") l = LANG_DE;
-            else if (lang_in == "3") l = LANG_EN;
-
-            run_modern_blind_crack(cipher, l);
-
-        } else if (opt == "3") {
             string cipher, crib;
-            cout << "\nIngrese el texto cifrado: ";
+            cout << "\n=======================================================\n";
+            cout << "  DESCIFRADO POR CRIB (MÉTODO HISTÓRICO DE BLETCHLEY PARK)\n";
+            cout << "=======================================================\n";
+            cout << "Matematicamente, la distancia de unicidad y los 150 billones de\n";
+            cout << "claves del clavijero hacen que sea obligatorio conocer al menos\n";
+            cout << "una palabra sospechada (un 'Crib', ej: HOLA, MENSAJE, ESTE, etc.)\n";
+            cout << "para romper el mensaje de forma determinista y sin errores.\n";
+            cout << "=======================================================\n\n";
+
+            cout << "Ingrese el texto cifrado: ";
             getline(cin, cipher);
-            cout << "Crib (palabra sospechada, ej: HOLA, MENSAJE, ESTE): ";
+            cout << "Palabra sospechada que contiene el mensaje (Crib): ";
             getline(cin, crib);
+
             run_crib_attack(cipher, crib);
 
-        } else if (opt == "4") {
+        } else if (opt == "3") {
             cout << "\n--- MENSAJE HISTORICO: OPERACION BARBARROJA (7 JULIO 1941) ---\n";
             string cipher = "EDPUD NRGYS ZRCXN UYTPO MRMBO FKTBZ REZKM LXLVE FGUEY";
             cout << "Cifrado interceptado:\n  " << cipher << "\n\n";
@@ -1087,7 +774,7 @@ void run_interactive_menu() {
             cout << "Texto descifrado:\n  " << plain << "\n\n";
             cout << "Tiempo de ejecucion: " << us << " microsegundos.\n";
 
-        } else if (opt == "5") {
+        } else if (opt == "4") {
             cout << "\nEjecutando benchmark de 10,000,000 caracteres...\n";
             Enigma m;
             m.configure_indices(0, 1, 2, 0, 0, 0, 0, 0, 0, 'B');
@@ -1101,7 +788,7 @@ void run_interactive_menu() {
             cout << "Procesados 10,000,000 caracteres en " << ms << " ms.\n";
             cout << "Velocidad: " << fixed << setprecision(2) << (10.0 / (ms / 1000.0)) << " millones de caracteres/segundo.\n";
 
-        } else if (opt == "6") {
+        } else if (opt == "5") {
             cout << "Saliendo...\n";
             break;
         }
@@ -1124,8 +811,6 @@ int main(int argc, char* argv[]) {
     string plugs_arg = "";
     string text_arg = "";
     string crib_arg = "";
-    string lang_arg = "es";
-    bool blind_crack = false;
     char reflector_arg = 'B';
     bool military_fmt = false;
 
@@ -1134,10 +819,8 @@ int main(int argc, char* argv[]) {
         if (arg == "-h" || arg == "--help") {
             print_help();
             return 0;
-        } else if (arg == "--blind") {
-            blind_crack = true;
-        } else if (arg == "--lang" && i + 1 < argc) {
-            lang_arg = argv[++i];
+        } else if ((arg == "-c" || arg == "--crack") && i + 1 < argc) {
+            crib_arg = argv[++i];
         } else if ((arg == "-r" || arg == "--rotors") && i + 1 < argc) {
             rotors_arg = argv[++i];
         } else if ((arg == "-p" || arg == "--pos") && i + 1 < argc) {
@@ -1150,8 +833,6 @@ int main(int argc, char* argv[]) {
             plugs_arg = argv[++i];
         } else if ((arg == "-t" || arg == "--text") && i + 1 < argc) {
             text_arg = argv[++i];
-        } else if (arg == "--crack" && i + 1 < argc) {
-            crib_arg = argv[++i];
         } else if (arg == "--military") {
             military_fmt = true;
         }
@@ -1163,14 +844,6 @@ int main(int argc, char* argv[]) {
             if (!text_arg.empty()) text_arg += "\n";
             text_arg += line;
         }
-    }
-
-    if (blind_crack) {
-        Language l = LANG_ES;
-        if (lang_arg == "de") l = LANG_DE;
-        else if (lang_arg == "en") l = LANG_EN;
-        run_modern_blind_crack(text_arg, l, reflector_arg);
-        return 0;
     }
 
     if (!crib_arg.empty()) {

@@ -92,7 +92,7 @@ public:
     uint8_t reflector[26];
     uint8_t plugboard[26];
 
-    string rotor_order[3];
+    int rotor_idx[3];
     int rings[3];
     int start_pos[3];
     string plug_str;
@@ -135,49 +135,15 @@ public:
         memcpy(plugboard, plugs, 26);
     }
 
-    static int get_rotor_index(const string& name) {
-        string upper_name = name;
-        for (char& c : upper_name) c = toupper(c);
-        if (upper_name == "I" || upper_name == "1") return 0;
-        if (upper_name == "II" || upper_name == "2") return 1;
-        if (upper_name == "III" || upper_name == "3") return 2;
-        if (upper_name == "IV" || upper_name == "4") return 3;
-        if (upper_name == "V" || upper_name == "5") return 4;
-        return 0;
-    }
-
-    void configure(const string& r_left, const string& r_mid, const string& r_right,
-                   int ring_l, int ring_m, int ring_r,
-                   int pos_l, int pos_m, int pos_r,
-                   char reflector_type = 'B',
-                   const string& plugs = "") {
-        rotor_order[0] = r_left;
-        rotor_order[1] = r_mid;
-        rotor_order[2] = r_right;
-        rings[0] = ring_l;
-        rings[1] = ring_m;
-        rings[2] = ring_r;
-        start_pos[0] = pos_l;
-        start_pos[1] = pos_m;
-        start_pos[2] = pos_r;
-
-        int idx_l = get_rotor_index(r_left);
-        int idx_m = get_rotor_index(r_mid);
-        int idx_r = get_rotor_index(r_right);
-
-        left.init(HISTORICAL_ROTORS[idx_l].wiring, HISTORICAL_ROTORS[idx_l].notch, ring_l, pos_l);
-        mid.init(HISTORICAL_ROTORS[idx_m].wiring, HISTORICAL_ROTORS[idx_m].notch, ring_m, pos_m);
-        right.init(HISTORICAL_ROTORS[idx_r].wiring, HISTORICAL_ROTORS[idx_r].notch, ring_r, pos_r);
-
-        set_reflector(reflector_type);
-        set_plugboard(plugs);
-    }
-
     void configure_indices(int idx_l, int idx_m, int idx_r,
                            int ring_l, int ring_m, int ring_r,
                            int pos_l, int pos_m, int pos_r,
                            char reflector_type = 'B',
                            const uint8_t* raw_plugs = nullptr) {
+        rotor_idx[0] = idx_l; rotor_idx[1] = idx_m; rotor_idx[2] = idx_r;
+        rings[0] = ring_l; rings[1] = ring_m; rings[2] = ring_r;
+        start_pos[0] = pos_l; start_pos[1] = pos_m; start_pos[2] = pos_r;
+
         left.init(HISTORICAL_ROTORS[idx_l].wiring, HISTORICAL_ROTORS[idx_l].notch, ring_l, pos_l);
         mid.init(HISTORICAL_ROTORS[idx_m].wiring, HISTORICAL_ROTORS[idx_m].notch, ring_m, pos_m);
         right.init(HISTORICAL_ROTORS[idx_r].wiring, HISTORICAL_ROTORS[idx_r].notch, ring_r, pos_r);
@@ -239,6 +205,192 @@ public:
 };
 
 // ============================================================================
+// PARSEO Y VALIDACIÓN ROBUSTA DE ENTRADAS
+// ============================================================================
+
+vector<string> split_tokens(const string& s) {
+    vector<string> tokens;
+    string cur = "";
+    for (char c : s) {
+        if (c == ',' || c == '-' || c == '/' || isspace(c)) {
+            if (!cur.empty()) { tokens.push_back(cur); cur = ""; }
+        } else {
+            cur += c;
+        }
+    }
+    if (!cur.empty()) tokens.push_back(cur);
+    return tokens;
+}
+
+bool parse_single_rotor(string token, int& out_idx) {
+    for (char& c : token) c = toupper(c);
+    if (token == "I" || token == "1") { out_idx = 0; return true; }
+    if (token == "II" || token == "2") { out_idx = 1; return true; }
+    if (token == "III" || token == "3") { out_idx = 2; return true; }
+    if (token == "IV" || token == "4") { out_idx = 3; return true; }
+    if (token == "V" || token == "5") { out_idx = 4; return true; }
+    return false;
+}
+
+bool validate_rotors_input(string input, int& r1, int& r2, int& r3, string& err_msg) {
+    // Si está vacío, por defecto I,II,III
+    if (input.empty()) {
+        r1 = 0; r2 = 1; r3 = 2;
+        return true;
+    }
+
+    auto tokens = split_tokens(input);
+
+    // Caso especial: si es de 3 dígitos directos como "123"
+    if (tokens.size() == 1 && tokens[0].size() == 3 && isdigit(tokens[0][0])) {
+        string s = tokens[0];
+        tokens = {string(1, s[0]), string(1, s[1]), string(1, s[2])};
+    }
+
+    if (tokens.size() != 3) {
+        err_msg = "Debes ingresar exactamente 3 rotores (ej: I,II,III o 1,2,3 o I-II-III).";
+        return false;
+    }
+
+    if (!parse_single_rotor(tokens[0], r1)) {
+        err_msg = "Rotor 1 invalido ('" + tokens[0] + "'). Debe ser del I al V (1 a 5).";
+        return false;
+    }
+    if (!parse_single_rotor(tokens[1], r2)) {
+        err_msg = "Rotor 2 invalido ('" + tokens[1] + "'). Debe ser del I al V (1 a 5).";
+        return false;
+    }
+    if (!parse_single_rotor(tokens[2], r3)) {
+        err_msg = "Rotor 3 invalido ('" + tokens[2] + "'). Debe ser del I al V (1 a 5).";
+        return false;
+    }
+
+    return true;
+}
+
+bool validate_positions_input(string input, int& p1, int& p2, int& p3, string& err_msg) {
+    if (input.empty()) {
+        p1 = 0; p2 = 0; p3 = 0;
+        return true;
+    }
+
+    auto tokens = split_tokens(input);
+    if (tokens.size() == 1 && tokens[0].size() == 3) {
+        string s = tokens[0];
+        tokens = {string(1, s[0]), string(1, s[1]), string(1, s[2])};
+    }
+
+    if (tokens.size() != 3) {
+        err_msg = "Debes ingresar 3 letras para la posicion inicial (ej: AAA o A-A-A).";
+        return false;
+    }
+
+    for (int i = 0; i < 3; ++i) {
+        if (tokens[i].size() != 1 || !isalpha(tokens[i][0])) {
+            err_msg = "Posicion '" + tokens[i] + "' invalida. Debe ser una letra (A-Z).";
+            return false;
+        }
+    }
+
+    p1 = toupper(tokens[0][0]) - 'A';
+    p2 = toupper(tokens[1][0]) - 'A';
+    p3 = toupper(tokens[2][0]) - 'A';
+    return true;
+}
+
+bool validate_rings_input(string input, int& g1, int& g2, int& g3, string& err_msg) {
+    if (input.empty()) {
+        g1 = 0; g2 = 0; g3 = 0;
+        return true;
+    }
+
+    auto tokens = split_tokens(input);
+    if (tokens.size() == 1 && tokens[0].size() == 3 && isalpha(tokens[0][0])) {
+        string s = tokens[0];
+        tokens = {string(1, s[0]), string(1, s[1]), string(1, s[2])};
+    }
+
+    if (tokens.size() != 3) {
+        err_msg = "Debes ingresar 3 valores para los anillos (ej: 01,01,01 o AAA o 1-1-1).";
+        return false;
+    }
+
+    auto parse_val = [](const string& tok, int& out) -> bool {
+        if (isdigit(tok[0])) {
+            int v = stoi(tok);
+            if (v >= 1 && v <= 26) { out = v - 1; return true; }
+            return false;
+        } else if (isalpha(tok[0])) {
+            out = toupper(tok[0]) - 'A';
+            return true;
+        }
+        return false;
+    };
+
+    if (!parse_val(tokens[0], g1) || !parse_val(tokens[1], g2) || !parse_val(tokens[2], g3)) {
+        err_msg = "Valores de anillo invalidos. Use numeros del 1 al 26 o letras de la A a la Z.";
+        return false;
+    }
+    return true;
+}
+
+bool validate_reflector_input(string input, char& ref, string& err_msg) {
+    if (input.empty()) {
+        ref = 'B';
+        return true;
+    }
+    string s = "";
+    for (char c : input) if (isalpha(c)) s += (char)toupper(c);
+    if (s == "B" || s == "UKWB") { ref = 'B'; return true; }
+    if (s == "C" || s == "UKWC") { ref = 'C'; return true; }
+    err_msg = "Reflector invalido ('" + input + "'). Solo existen reflectores B o C.";
+    return false;
+}
+
+bool validate_plugboard_input(string input, string& clean_plugs, string& err_msg) {
+    clean_plugs = "";
+    if (input.empty()) return true;
+
+    stringstream ss(input);
+    string pair;
+    bool used[26] = {false};
+    int count = 0;
+
+    while (ss >> pair) {
+        if (pair.size() != 2 || !isalpha(pair[0]) || !isalpha(pair[1])) {
+            err_msg = "Par de clavijas invalido: '" + pair + "'. Cada par debe ser de 2 letras (ej: AV).";
+            return false;
+        }
+        char a = toupper(pair[0]);
+        char b = toupper(pair[1]);
+        if (a == b) {
+            err_msg = "No puedes conectar una letra consigo misma ('" + pair + "').";
+            return false;
+        }
+        if (used[a - 'A']) {
+            err_msg = "La letra '" + string(1, a) + "' ya esta conectada a otra clavija.";
+            return false;
+        }
+        if (used[b - 'A']) {
+            err_msg = "La letra '" + string(1, b) + "' ya esta conectada a otra clavija.";
+            return false;
+        }
+        used[a - 'A'] = true;
+        used[b - 'A'] = true;
+
+        if (!clean_plugs.empty()) clean_plugs += " ";
+        clean_plugs += a; clean_plugs += b;
+        count++;
+    }
+
+    if (count > 10) {
+        err_msg = "La maquina Enigma solo admite un maximo de 10 cables en el clavijero.";
+        return false;
+    }
+    return true;
+}
+
+// ============================================================================
 // MODELOS ESTADÍSTICOS DE IDIOMAS (ESPAÑOL, ALEMÁN, INGLÉS)
 // ============================================================================
 
@@ -248,7 +400,6 @@ struct LanguageModel {
     double bigram_weights[26][26];
 
     void init(Language lang) {
-        // Monogramas base (log-probabilidades)
         const double mono_es[26] = {
             -2.07, -4.25, -3.06, -2.83, -1.98, -4.97, -4.59, -4.96,
             -2.77, -5.42, -9.21, -3.00, -3.45, -2.70, -2.44, -3.68,
@@ -276,7 +427,6 @@ struct LanguageModel {
             }
         }
 
-        // Bigramas frecuentes del idioma correspondiente
         if (lang == LANG_ES) {
             const char* top_es[] = {
                 "DE", "ES", "EN", "EL", "LA", "OS", "ON", "ER", "AS", "AR",
@@ -285,28 +435,20 @@ struct LanguageModel {
                 "ST", "MA", "RO", "AC", "UN", "CA", "SO", "PA", "ME", "DI",
                 "PR", "OR", "LE", "DA", "LL", "CH", "RR", "PE", "LO", "SU"
             };
-            for (const char* b : top_es) {
-                bigram_weights[b[0]-'A'][b[1]-'A'] += 3.0;
-            }
+            for (const char* b : top_es) bigram_weights[b[0]-'A'][b[1]-'A'] += 3.0;
         } else if (lang == LANG_DE) {
             const char* top_de[] = {
                 "ER", "EN", "CH", "DE", "EI", "TE", "IN", "ND", "IE", "GE",
                 "ES", "NE", "UN", "ST", "RE", "HE", "AN", "BE", "SE", "NG",
-                "DI", "IC", "SC", "AU", "DA", "IT", "LE", "ZU", "OR", "SI",
-                "VO", "WA", "ME", "MA", "TR", "WE", "RA", "AL", "HA", "SS"
+                "DI", "IC", "SC", "AU", "DA", "IT", "LE", "ZU", "OR", "SI"
             };
-            for (const char* b : top_de) {
-                bigram_weights[b[0]-'A'][b[1]-'A'] += 3.0;
-            }
+            for (const char* b : top_de) bigram_weights[b[0]-'A'][b[1]-'A'] += 3.0;
         } else {
             const char* top_en[] = {
                 "TH", "HE", "IN", "ER", "AN", "RE", "ED", "ON", "ES", "ST",
-                "EN", "AT", "TO", "NT", "HA", "ND", "OU", "EA", "NG", "AS",
-                "OR", "TI", "IS", "ET", "IT", "AR", "TE", "SE", "HI", "OF"
+                "EN", "AT", "TO", "NT", "HA", "ND", "OU", "EA", "NG", "AS"
             };
-            for (const char* b : top_en) {
-                bigram_weights[b[0]-'A'][b[1]-'A'] += 3.0;
-            }
+            for (const char* b : top_en) bigram_weights[b[0]-'A'][b[1]-'A'] += 3.0;
         }
     }
 
@@ -330,7 +472,7 @@ double calc_ioc(const vector<uint8_t>& text) {
 }
 
 // ============================================================================
-// DESCIFRADOR MODERNO 100% A CIEGAS (Ciphertext-Only: IoC + Hill-Climbing)
+// DESCIFRADOR MODERNO 100% A CIEGAS (Ciphertext-Only)
 // ============================================================================
 
 struct ModernCrackResult {
@@ -352,11 +494,15 @@ ModernCrackResult run_modern_blind_crack(const string& ciphertext, Language lang
     vector<uint8_t> clean_cipher;
     for (char c : ciphertext) if (isalpha(c)) clean_cipher.push_back(toupper(c) - 'A');
 
-    cout << "Longitud util   : " << clean_cipher.size() << " caracteres\n";
+    cout << "Longitud util   : " << clean_cipher.size() << " letras\n";
     cout << "IoC del cifrado : " << fixed << setprecision(5) << calc_ioc(clean_cipher) << " (Ruido ~0.038)\n\n";
 
-    if (clean_cipher.size() < 30) {
-        cout << "[!] Advertencia: Los textos de menos de 40 letras tienen varianza estadistica alta.\n";
+    if (clean_cipher.size() < 70) {
+        cout << "[!] AVISO IMPORTANTE (Distancia de Unicidad de Shannon):\n";
+        cout << "    El texto tiene " << clean_cipher.size() << " letras. Para descifrado a ciegas\n";
+        cout << "    (sin conocer clave ni palabras) se recomiendan al menos 80-100 letras.\n";
+        cout << "    Para mensajes cortos como este, la tecnica mas precisa es el\n";
+        cout << "    Ataque por CRIB (Opcion 3), indicando una palabra sospechada.\n\n";
     }
 
     LanguageModel lm;
@@ -364,7 +510,7 @@ ModernCrackResult run_modern_blind_crack(const string& ciphertext, Language lang
 
     auto t0 = chrono::high_resolution_clock::now();
 
-    // 1. Generar las 60 ordenaciones de rotores
+    // 1. Generamos TODAS las 125 combinaciones posibles (las 60 históricas + repetidas)
     struct RotorPerm { int r1, r2, r3; };
     vector<RotorPerm> perms;
     for (int r1 = 0; r1 < 5; ++r1) {
@@ -376,6 +522,15 @@ ModernCrackResult run_modern_blind_crack(const string& ciphertext, Language lang
             }
         }
     }
+    for (int r1 = 0; r1 < 5; ++r1) {
+        for (int r2 = 0; r2 < 5; ++r2) {
+            for (int r3 = 0; r3 < 5; ++r3) {
+                if (r1 == r2 || r2 == r3 || r1 == r3) {
+                    perms.push_back({r1, r2, r3});
+                }
+            }
+        }
+    }
 
     struct RotorCandidate {
         int r1, r2, r3;
@@ -383,10 +538,10 @@ ModernCrackResult run_modern_blind_crack(const string& ciphertext, Language lang
         double ioc;
     };
 
-    cout << "[Fase 1/2] Escaneando 1,054,560 configuraciones de rotores con IoC...\n";
+    cout << "[Fase 1/2] Escaneando " << (perms.size() * 17576) << " configuraciones de rotores con IoC...\n";
 
     vector<RotorCandidate> top_candidates;
-    const double IOC_THRESHOLD = 0.046; // Supera claramente el ruido aleatorio (0.038)
+    const double IOC_THRESHOLD = 0.046;
 
     #pragma omp parallel
     {
@@ -406,8 +561,7 @@ ModernCrackResult run_modern_blind_crack(const string& ciphertext, Language lang
 
                         int counts[26] = {0};
                         for (uint8_t c : clean_cipher) {
-                            uint8_t d = sim.process_letter(c);
-                            counts[d]++;
+                            counts[sim.process_letter(c)]++;
                         }
 
                         long long sum = 0;
@@ -435,16 +589,15 @@ ModernCrackResult run_modern_blind_crack(const string& ciphertext, Language lang
     auto t1 = chrono::high_resolution_clock::now();
     auto ms_phase1 = chrono::duration_cast<chrono::milliseconds>(t1 - t0).count();
 
-    cout << "  -> Fase 1 completada en " << ms_phase1 << " ms. Candidatos destacados: " << top_candidates.size() << "\n\n";
+    cout << "  -> Fase 1 completada en " << ms_phase1 << " ms. Candidatos filtrados: " << top_candidates.size() << "\n\n";
 
     if (top_candidates.empty()) {
-        cout << "[!] No se detectaron picos de IoC suficientes. Es posible que el texto sea muy corto.\n";
+        cout << "[!] No se detectaron picos de IoC suficientes.\n";
         return {};
     }
 
-    // Tomamos los mejores candidatos para la fase de Hill-Climbing del clavijero
-    int candidates_to_test = min((int)top_candidates.size(), 12);
-    cout << "[Fase 2/2] Optimizando clavijero (Steckerbrett) mediante Hill-Climbing en los mejores candidatos...\n";
+    int candidates_to_test = min((int)top_candidates.size(), 30);
+    cout << "[Fase 2/2] Optimizando clavijero (Steckerbrett) en los " << candidates_to_test << " mejores candidatos...\n";
 
     const char* rotor_names[5] = {"I", "II", "III", "IV", "V"};
     ModernCrackResult best_result;
@@ -466,7 +619,6 @@ ModernCrackResult run_modern_blind_crack(const string& ciphertext, Language lang
 
         double cur_score = eval_plugs(cur_plugs);
 
-        // Algoritmo de escalada (Hill Climbing)
         bool improved = true;
         int passes = 0;
         while (improved && passes < 10) {
@@ -477,13 +629,11 @@ ModernCrackResult run_modern_blind_crack(const string& ciphertext, Language lang
                     uint8_t test_plugs[26];
                     memcpy(test_plugs, cur_plugs, 26);
 
-                    // Desconectar cables existentes de a y b
                     int old_a = test_plugs[a];
                     int old_b = test_plugs[b];
                     test_plugs[old_a] = old_a;
                     test_plugs[old_b] = old_b;
 
-                    // Conectar a y b
                     test_plugs[a] = b;
                     test_plugs[b] = a;
 
@@ -513,7 +663,6 @@ ModernCrackResult run_modern_blind_crack(const string& ciphertext, Language lang
             }
             best_result.plugboard = plugs_str.empty() ? "(Ninguno)" : plugs_str;
 
-            // Decodificar mensaje completo
             Enigma final_sim;
             final_sim.configure_indices(cand.r1, cand.r2, cand.r3, 0, 0, 0, cand.p1, cand.p2, cand.p3, reflector_type, cur_plugs);
             best_result.plaintext = "";
@@ -558,7 +707,6 @@ void run_crib_attack(const string& ciphertext, const string& crib, char reflecto
     cout << "=======================================================\n";
     cout << "Texto cifrado : " << ciphertext.substr(0, 40) << (ciphertext.size() > 40 ? "..." : "") << "\n";
     cout << "Crib (clave)  : " << crib << "\n";
-    cout << "Probando 60 permutaciones de rotores x 17,576 posiciones = 1,054,560 claves...\n\n";
 
     string clean_cipher = "";
     for (char c : ciphertext) if (isalpha(c)) clean_cipher += (char)toupper(c);
@@ -591,17 +739,18 @@ void run_crib_attack(const string& ciphertext, const string& crib, char reflecto
     cout << "Posiciones validas para el crib (filtrando colisiones N!=E(N)): " 
          << valid_offsets.size() << "/" << (clean_cipher.size() - clean_crib.size() + 1) << "\n";
 
+    // 125 combinaciones posibles
     struct RotorPerm { int r1, r2, r3; };
     vector<RotorPerm> perms;
     for (int r1 = 0; r1 < 5; ++r1) {
         for (int r2 = 0; r2 < 5; ++r2) {
-            if (r2 == r1) continue;
             for (int r3 = 0; r3 < 5; ++r3) {
-                if (r3 == r1 || r3 == r2) continue;
                 perms.push_back({r1, r2, r3});
             }
         }
     }
+
+    cout << "Probando 125 combinaciones de rotores x 17,576 posiciones = 2,197,000 claves...\n\n";
 
     #pragma omp parallel for schedule(dynamic)
     for (size_t pi = 0; pi < perms.size(); ++pi) {
@@ -666,12 +815,12 @@ void run_crib_attack(const string& ciphertext, const string& crib, char reflecto
 }
 
 // ============================================================================
-// FUNCIONES AUXILIARES Y MENÚ INTERACTIVO
+// MENÚ INTERACTIVO CON VALIDACIÓN PASO A PASO
 // ============================================================================
 
 void print_help() {
     cout << "=====================================================================\n";
-    cout << "   SIMULADOR Y DESCIFRADOR MODERNO DE ENIGMA I / M3 (C++17)          \n";
+    cout << "   SIMULADOR Y DESCIFRADOR DE ENIGMA I / M3 (C++17)                  \n";
     cout << "=====================================================================\n";
     cout << "Uso: enigma [opciones]\n\n";
     cout << "Modos de Criptanálisis (Descifrado):\n";
@@ -679,48 +828,24 @@ void print_help() {
     cout << "  --lang <es|de|en>           Idioma para descifrado a ciegas (def: es)\n";
     cout << "  --crack <crib>              Ataque por crib (palabra sospechada, Bletchley Park)\n\n";
     cout << "Opciones de Operación Normal (con clave conocida):\n";
-    cout << "  -r, --rotors <R1,R2,R3>     Rotores de izq a der (ej: I,II,III o 1,2,3)\n";
-    cout << "  -p, --pos <XYZ>             Posicion inicial (Grundstellung, ej: AAA)\n";
+    cout << "  -r, --rotors <R1,R2,R3>     Rotores de izq a der (ej: I,II,III o 1,2,3 o I-II-III)\n";
+    cout << "  -p, --pos <XYZ>             Posicion inicial (Grundstellung, ej: AAA o A-A-A)\n";
     cout << "  -g, --rings <G1,G2,G3>      Anillos (Ringstellung, ej: 01,01,01 o AAA)\n";
     cout << "  -u, --reflector <B|C>       Reflector (UKW-B o UKW-C, por defecto B)\n";
     cout << "  -s, --plugs <\"AB CD...\">    Clavijero (Steckerbrett, pares separados por espacio)\n";
     cout << "  -t, --text <mensaje>        Texto a procesar\n";
     cout << "  --military                  Formato militar (mayusculas en bloques de 5)\n";
     cout << "  -h, --help                  Muestra esta ayuda\n\n";
-    cout << "Ejemplos:\n";
-    cout << "  enigma --blind --lang es -t \"ODZQ LA LV VZKRMYM...\"\n";
-    cout << "  enigma --crack \"MENSAJE\" -t \"ODZQ LA LV VZKRMYM...\"\n";
-    cout << "  enigma -r I,II,III -p AAA -t \"BDZGOWCXLT\"\n";
-    cout << "=====================================================================\n";
-}
-
-int parse_ring_val(const string& s) {
-    if (s.empty()) return 0;
-    if (isdigit(s[0])) {
-        int v = stoi(s);
-        return (v >= 1 && v <= 26) ? (v - 1) : 0;
-    }
-    return toupper(s[0]) - 'A';
-}
-
-void parse_three_parts(const string& s, string& p1, string& p2, string& p3) {
-    stringstream ss(s);
-    getline(ss, p1, ',');
-    getline(ss, p2, ',');
-    getline(ss, p3, ',');
-    if (p2.empty() && p3.empty() && s.size() == 3) {
-        p1 = string(1, s[0]);
-        p2 = string(1, s[1]);
-        p3 = string(1, s[2]);
-    }
 }
 
 void run_interactive_menu() {
+    const char* rotor_names[5] = {"I", "II", "III", "IV", "V"};
+
     while (true) {
         cout << "\n=======================================================\n";
         cout << "       SIMULADOR Y DESCIFRADOR DE ENIGMA (C++17)       \n";
         cout << "=======================================================\n";
-        cout << "1. Decodificar / Codificar mensaje (clave conocida)\n";
+        cout << "1. Codificar / Decodificar mensaje (con clave conocida)\n";
         cout << "2. Descifrador MODERNO A CIEGAS (sin clave ni crib)\n";
         cout << "3. Descifrador clasico por CRIB (Bletchley Park / Bombe)\n";
         cout << "4. Caso historico real (Operacion Barbarroja 1941)\n";
@@ -733,41 +858,79 @@ void run_interactive_menu() {
         if (opt.empty()) continue;
 
         if (opt == "1") {
-            string r_in, p_in, g_in, s_in, ref_in, text_in;
-            cout << "\nRotores (ej. I,II,III) [I,II,III]: ";
-            getline(cin, r_in);
-            if (r_in.empty()) r_in = "I,II,III";
+            int r1 = 0, r2 = 1, r3 = 2;
+            int p1 = 0, p2 = 0, p3 = 0;
+            int g1 = 0, g2 = 0, g3 = 0;
+            char ref_c = 'B';
+            string plugs = "";
+            string text_in = "";
+            string err = "";
 
-            cout << "Posicion inicial (ej. AAA) [AAA]: ";
-            getline(cin, p_in);
-            if (p_in.empty()) p_in = "AAA";
+            // 1. Rotores
+            while (true) {
+                cout << "\nRotores (ej. I,II,III o 1,2,3 o I-II-III) [I,II,III]: ";
+                string r_in;
+                getline(cin, r_in);
+                if (validate_rotors_input(r_in, r1, r2, r3, err)) break;
+                cout << "[!] Error: " << err << "\n";
+            }
 
-            cout << "Anillos (Ringstellung, ej. 01,01,01) [01,01,01]: ";
-            getline(cin, g_in);
-            if (g_in.empty()) g_in = "01,01,01";
+            // 2. Posición inicial
+            while (true) {
+                cout << "Posicion inicial (ej. AAA o A-A-A) [AAA]: ";
+                string p_in;
+                getline(cin, p_in);
+                if (validate_positions_input(p_in, p1, p2, p3, err)) break;
+                cout << "[!] Error: " << err << "\n";
+            }
 
-            cout << "Reflector (B o C) [B]: ";
-            getline(cin, ref_in);
-            char ref_c = ref_in.empty() ? 'B' : ref_in[0];
+            // 3. Anillos
+            while (true) {
+                cout << "Anillos (Ringstellung, ej. 01,01,01 o AAA o 1-1-1) [01,01,01]: ";
+                string g_in;
+                getline(cin, g_in);
+                if (validate_rings_input(g_in, g1, g2, g3, err)) break;
+                cout << "[!] Error: " << err << "\n";
+            }
 
-            cout << "Clavijero / Steckerbrett (ej. AV BS CG o vacio): ";
-            getline(cin, s_in);
+            // 4. Reflector
+            while (true) {
+                cout << "Reflector (B o C) [B]: ";
+                string ref_in;
+                getline(cin, ref_in);
+                if (validate_reflector_input(ref_in, ref_c, err)) break;
+                cout << "[!] Error: " << err << "\n";
+            }
 
-            cout << "Texto a procesar: ";
+            // 5. Clavijero
+            while (true) {
+                cout << "Clavijero / Steckerbrett (ej. AV BS CG o vacio): ";
+                string s_in;
+                getline(cin, s_in);
+                if (validate_plugboard_input(s_in, plugs, err)) break;
+                cout << "[!] Error: " << err << "\n";
+            }
+
+            // 6. Texto
+            cout << "\nTexto a procesar: ";
             getline(cin, text_in);
 
-            string r1, r2, r3, g1, g2, g3;
-            parse_three_parts(r_in, r1, r2, r3);
-            parse_three_parts(g_in, g1, g2, g3);
-
-            int p1 = (p_in.size() > 0 && isalpha(p_in[0])) ? toupper(p_in[0]) - 'A' : 0;
-            int p2 = (p_in.size() > 1 && isalpha(p_in[1])) ? toupper(p_in[1]) - 'A' : 0;
-            int p3 = (p_in.size() > 2 && isalpha(p_in[2])) ? toupper(p_in[2]) - 'A' : 0;
+            // Resumen de configuración confirmada
+            cout << "\n=======================================================\n";
+            cout << "              CONFIGURACIÓN DE LA MÁQUINA              \n";
+            cout << "=======================================================\n";
+            cout << "  Rotores configurados : " << rotor_names[r1] << " - " << rotor_names[r2] << " - " << rotor_names[r3];
+            if (r1 == r2 || r2 == r3 || r1 == r3) cout << " (Aviso: Rotores repetidos)";
+            cout << "\n";
+            cout << "  Posición inicial     : " << (char)('A' + p1) << " - " << (char)('A' + p2) << " - " << (char)('A' + p3) << "\n";
+            cout << "  Anillos              : " << (g1 + 1) << " - " << (g2 + 1) << " - " << (g3 + 1) << "\n";
+            cout << "  Reflector            : UKW-" << ref_c << "\n";
+            cout << "  Clavijero            : " << (plugs.empty() ? "(Sin cables)" : plugs) << "\n";
+            cout << "=======================================================\n";
 
             Enigma m;
-            m.configure(r1, r2, r3,
-                        parse_ring_val(g1), parse_ring_val(g2), parse_ring_val(g3),
-                        p1, p2, p3, ref_c, s_in);
+            m.configure_indices(r1, r2, r3, g1, g2, g3, p1, p2, p3, ref_c);
+            if (!plugs.empty()) m.set_plugboard(plugs);
 
             auto t0 = chrono::high_resolution_clock::now();
             string result = m.process_text(text_in);
@@ -775,8 +938,8 @@ void run_interactive_menu() {
             auto us = chrono::duration_cast<chrono::microseconds>(t1 - t0).count();
 
             cout << "\n-------------------------------------------------------\n";
-            cout << "Resultado : " << result << "\n";
-            cout << "Tiempo    : " << us << " microsegundos\n";
+            cout << "Texto procesado: " << result << "\n";
+            cout << "Tiempo         : " << us << " microsegundos\n";
             cout << "-------------------------------------------------------\n";
 
         } else if (opt == "2") {
@@ -794,9 +957,9 @@ void run_interactive_menu() {
 
         } else if (opt == "3") {
             string cipher, crib;
-            cout << "\nTexto cifrado: ";
+            cout << "\nIngrese el texto cifrado: ";
             getline(cin, cipher);
-            cout << "Crib (palabra que sospecha que contiene): ";
+            cout << "Crib (palabra sospechada, ej: HOLA, MENSAJE, ESTE): ";
             getline(cin, crib);
             run_crib_attack(cipher, crib);
 
@@ -806,8 +969,8 @@ void run_interactive_menu() {
             cout << "Cifrado interceptado:\n  " << cipher << "\n\n";
 
             Enigma m;
-            m.configure("II", "IV", "V", 1, 20, 11, 'B'-'A', 'L'-'A', 'A'-'A', 'B',
-                        "AV BS CG DL FU HZ IN KM OW RX");
+            m.configure_indices(1, 3, 4, 1, 20, 11, 'B'-'A', 'L'-'A', 'A'-'A', 'B');
+            m.set_plugboard("AV BS CG DL FU HZ IN KM OW RX");
 
             auto t0 = chrono::high_resolution_clock::now();
             string plain = m.process_text(cipher);
@@ -820,7 +983,7 @@ void run_interactive_menu() {
         } else if (opt == "5") {
             cout << "\nEjecutando benchmark de 10,000,000 caracteres...\n";
             Enigma m;
-            m.configure("I", "II", "III", 0, 0, 0, 0, 0, 0, 'B');
+            m.configure_indices(0, 1, 2, 0, 0, 0, 0, 0, 0, 'B');
             auto t0 = chrono::high_resolution_clock::now();
             uint8_t dummy = 0;
             for (int i = 0; i < 10000000; ++i) {
@@ -837,6 +1000,10 @@ void run_interactive_menu() {
         }
     }
 }
+
+// ============================================================================
+// MAIN / CLI
+// ============================================================================
 
 int main(int argc, char* argv[]) {
     if (argc == 1) {
@@ -904,18 +1071,29 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    string r1, r2, r3, g1, g2, g3;
-    parse_three_parts(rotors_arg, r1, r2, r3);
-    parse_three_parts(rings_arg, g1, g2, g3);
+    int r1, r2, r3, p1, p2, p3, g1, g2, g3;
+    char ref_c;
+    string plugs_clean, err;
 
-    int p1 = (pos_arg.size() > 0 && isalpha(pos_arg[0])) ? toupper(pos_arg[0]) - 'A' : 0;
-    int p2 = (pos_arg.size() > 1 && isalpha(pos_arg[1])) ? toupper(pos_arg[1]) - 'A' : 0;
-    int p3 = (pos_arg.size() > 2 && isalpha(pos_arg[2])) ? toupper(pos_arg[2]) - 'A' : 0;
+    if (!validate_rotors_input(rotors_arg, r1, r2, r3, err)) {
+        cerr << "[!] Error en rotores: " << err << "\n"; return 1;
+    }
+    if (!validate_positions_input(pos_arg, p1, p2, p3, err)) {
+        cerr << "[!] Error en posicion: " << err << "\n"; return 1;
+    }
+    if (!validate_rings_input(rings_arg, g1, g2, g3, err)) {
+        cerr << "[!] Error en anillos: " << err << "\n"; return 1;
+    }
+    if (!validate_reflector_input(string(1, reflector_arg), ref_c, err)) {
+        cerr << "[!] Error en reflector: " << err << "\n"; return 1;
+    }
+    if (!validate_plugboard_input(plugs_arg, plugs_clean, err)) {
+        cerr << "[!] Error en clavijero: " << err << "\n"; return 1;
+    }
 
     Enigma machine;
-    machine.configure(r1, r2, r3,
-                      parse_ring_val(g1), parse_ring_val(g2), parse_ring_val(g3),
-                      p1, p2, p3, reflector_arg, plugs_arg);
+    machine.configure_indices(r1, r2, r3, g1, g2, g3, p1, p2, p3, ref_c);
+    if (!plugs_clean.empty()) machine.set_plugboard(plugs_clean);
 
     string output = machine.process_text(text_arg, !military_fmt);
     cout << output << endl;
